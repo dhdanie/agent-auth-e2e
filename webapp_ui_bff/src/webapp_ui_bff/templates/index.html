@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebApp UI - BFF Demo</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/style.css') }}">
+</head>
+<body>
+<div class="container">
+    <h1>WebApp UI (with BFF)</h1>
+
+    <div id="auth-status">
+        {% if user %}
+        <p>Welcome, <strong id="userName">{{ user.name }}</strong> ({{ user.preferred_username }})!</p>
+        <p>Object ID: <span id="userOid">{{ user.oid }}</span></p>
+        <button onclick="logout()">Logout</button>
+        <hr>
+        <button onclick="fetchUserInfo()">Get User Info from BFF</button>
+        {% else %}
+        <p>You are not logged in.</p>
+        <button onclick="login()">Login</button>
+        {% endif %}
+    </div>
+
+    {% if user %}
+    <div id="actions">
+        <h2>Actions</h2>
+        <label for="cityInput">Enter City:</label>
+        <input type="text" id="cityInput" value="Redmond">
+        <button onclick="callInvokeWeather()">Call Agent for Weather</button>
+    </div>
+    {% endif %}
+
+    <div id="responseArea">
+        <h2>Response / Status</h2>
+        <pre id="apiResponse">API responses will appear here...</pre>
+    </div>
+</div>
+
+<script src="{{ url_for('static', path='/js/app.js') }}"></script>
+</body>
+</html>

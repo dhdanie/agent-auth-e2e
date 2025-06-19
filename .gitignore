@@ -1,0 +1,11 @@
+.env
+uv.lock
+.venv
+.idea
+key.pem
+cert.pem
+*.key
+*.crt
+*.csr
+__pycache__
+*.iml
