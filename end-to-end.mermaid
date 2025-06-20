@@ -1,0 +1,53 @@
+sequenceDiagram
+    participant U as User
+    participant C as Client Application
+    participant AS as Auth Server
+    participant AP as Agent Platform
+    participant LLM as LLM API (apiGPTeal)
+    participant TR as Tool Registry
+    participant TC as Task Cache
+    participant TC2 as Token Cache
+    participant TS as Tool Service
+
+    Note right of U: Initial Login and Consent
+    U->>C: Launch Client Application
+    C-->>U: Redirect to Auth Server (include Agent Platform scope)
+    U->>AS: Login and Grant Consent
+    AS-->>U: Redirect to Client Application (with access code)
+    U->>C: Access Client Application (with access code)
+    C->>AS: Exchange Access Code for Auth/Refresh Tokens
+    AS-->>C: Return Auth/Refresh Tokens
+    C->>C: Cache Tokens/Establish Session
+    C-->>U: Redirect to main page
+
+    Note right of U: Invoke Agent
+    U->>C: Initiate agent interaction
+    C->>AP: Invoke Agent Service (sending auth token)
+    AP->>AS: Validate Auth Token
+    AS-->>AP: Token Validated
+    AP->>LLM: Invoke LLM
+    LLM-->>AP: LLM Response w/tool call
+    AP->>TR: Retrieve AS/Scopes for Tool
+    TR-->>AP: Tool AS/Scopes
+    AP->>TC2: Check for cached token (User/AS/Scope)
+    TC2-->>AP: Token not found
+    AP->>TC: Cache Task/Set state to Paused
+    AP->>C: Additional Consent Required (send consent URL)
+    C->>U: Display Additional Consent Required (link)
+    U->>AS: Click link, log in, grant consent
+    AS-->>U: Redirect to Agent Service Callback (with access code)
+    U->>AP: Redirect to Agent Service Callback (with access code)
+    AP->>AS: Exchange Access Code for Auth Token (for Tool Service)
+    AS-->>AP: Return Auth Token
+    AP->>TC2: Cache Token (User/AS/Scope)
+    AP->>U: Login Successful (return to Client Application)
+    U->>C: Click Resume
+    C->>AP: Resume Task (send session ID)
+    AP->>TC: Retrieve Task from Cache
+    TC-->>AP: Return Task
+    AP->>TC2: Retrieve cached token (User/AS/Scope)
+    TC2-->>AP: Return Auth Token
+    AP->>TS: Invoke Tool Service (with Auth Token)
+    TS-->>AP: Tool Service Response
+    AP-->>C: Agent Service Response
+    C-->>U: Display Tool Service Response

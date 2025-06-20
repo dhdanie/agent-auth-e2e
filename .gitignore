@@ -9,3 +9,4 @@ cert.pem
 *.csr
 __pycache__
 *.iml
+.DS_Store
