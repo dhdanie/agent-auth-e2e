@@ -4,6 +4,8 @@ import httpx  # Using httpx for async requests
 from fastapi import FastAPI, Depends, HTTPException, status, Header, Body
 from typing import Dict, Optional, Any
 import asyncio
+from fastapi.responses import HTMLResponse
+from fastapi import Request
 
 from .auth_utils import get_current_user_agent, AgentTokenData, get_obo_token_for_tool_service, ConsentRequiredException
 from .config import settings
@@ -41,6 +43,20 @@ CLIENT_ID_TO_REDIRECT_URI = {
     "cb4fa55f-597f-4b70-a4e2-6237d74670be": "https://localhost:8000/auth/callback",
     # Add more mappings as needed for other UIs
 }
+
+# --- Simulated Tool Registry ---
+TOOL_REGISTRY = {
+    "weather_tool": {
+        "as_type": "entra_id",
+        "client_id": settings.AGENT_CLIENT_ID,
+        "client_secret": settings.AGENT_CLIENT_SECRET,
+        "authority": settings.AUTHORITY,
+        "scopes": settings.TOOL_SERVICE_SCOPES,
+        "redirect_uri": settings.AGENT_REDIRECT_URI,
+    },
+    # Future tools can be added here with different AS configs
+}
+
 
 @app.post("/api/invokeagent/checkweather", response_model=Dict)
 async def invoke_agent_check_weather(
@@ -167,6 +183,56 @@ async def resume_paused_invocation(
         "agent_message": f"Agent resumed and completed request for user {current_user.name}.",
         "tool_service_response": tool_response_data
     }
+
+
+@app.get("/auth/callback")
+async def consent_callback(request: Request):
+    """
+    Handles the redirect from the authorization server after user consent.
+    Exchanges the code for a token and marks the invocation as ready to resume.
+    """
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    invocation_id = state
+    if not code or not invocation_id:
+        return HTMLResponse("Missing code or invocation_id (state).", status_code=400)
+
+    paused = paused_invocations.get(invocation_id)
+    if not paused:
+        return HTMLResponse("No paused invocation found for this ID.", status_code=404)
+
+    # --- Lookup tool config from registry (simulate weather_tool for now) ---
+    tool_id = paused.get("tool_id", "weather_tool")  # Default to weather_tool for this demo
+    tool_config = TOOL_REGISTRY.get(tool_id)
+    if not tool_config:
+        return HTMLResponse(f"Tool config not found for tool_id: {tool_id}", status_code=500)
+    tool_as_type = tool_config["as_type"]
+
+    if tool_as_type == "entra_id":
+        import msal
+        msal_app = msal.ConfidentialClientApplication(
+            client_id=tool_config["client_id"],
+            authority=tool_config["authority"],
+            client_credential=tool_config["client_secret"],
+        )
+        try:
+            result = msal_app.acquire_token_by_authorization_code(
+                code=code,
+                scopes=tool_config["scopes"],
+                redirect_uri=tool_config["redirect_uri"]
+            )
+            if "access_token" in result:
+                paused["tool_access_token"] = result["access_token"]
+                paused["consent_complete"] = True
+                paused_invocations[invocation_id] = paused
+                return HTMLResponse("Consent complete. Please return to the app and click Resume.")
+            else:
+                error = result.get("error_description", str(result))
+                return HTMLResponse(f"Token exchange failed: {error}", status_code=400)
+        except Exception as e:
+            return HTMLResponse(f"Exception during token exchange: {str(e)}", status_code=500)
+    else:
+        return HTMLResponse("Tool AS not supported yet.", status_code=501)
 
 
 def _build_consent_url(redirect_uri: Optional[str] = None):
