@@ -300,7 +300,7 @@ async def invoke_weather_via_agent(
             )
 
     return {
-        "bff_message": f"BFF processed weather request for user {user.get('name', 'Unknown')} for city {city}.",
+        "bff_message": f"BFF processed request for user {user.get('name', 'Unknown')} for city {city}.",
         "agent_service_response": agent_response_data
     }
 

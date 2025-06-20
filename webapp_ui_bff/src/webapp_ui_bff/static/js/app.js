@@ -25,23 +25,14 @@ async function fetchUserInfo() {
 
 async function callInvokeWeather() {
     const responseArea = document.getElementById('apiResponse');
-    const cityInput = document.getElementById('cityInput');
-    const city = cityInput.value.trim();
-
-    if (!city) {
-        responseArea.textContent = 'Please enter a city name.';
-        return;
-    }
-
-    responseArea.textContent = `Calling agent for weather in ${city}...`;
-
+    responseArea.textContent = `Calling agent...`;
     try {
         const response = await fetch('/api/bff/invoke-weather', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({city: city})
+            body: JSON.stringify({city: 'Redmond'}) // Hardcoded city
         });
 
         const responseText = await response.text();

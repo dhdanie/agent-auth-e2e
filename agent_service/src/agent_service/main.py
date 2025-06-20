@@ -2,7 +2,7 @@
 
 import httpx  # Using httpx for async requests
 from fastapi import FastAPI, Depends, HTTPException, status, Header, Body
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Tuple, Set
 import asyncio
 from fastapi.responses import HTMLResponse
 from fastapi import Request
@@ -39,6 +39,9 @@ async def home():
 
 # In-memory store for paused invocations (for demo; use persistent store in prod)
 paused_invocations = {}
+
+# In-memory persistent token cache: (user_oid, as_type, frozenset(scopes)) -> {access_token, refresh_token, expires_at}
+token_cache = {}
 
 # Mock database: client_id -> redirect_uri
 CLIENT_ID_TO_REDIRECT_URI = {
@@ -91,8 +94,39 @@ async def invoke_agent_check_weather(
     tool_id = random.choice(["weather_tool", "github_tool"])
     tool_config = TOOL_REGISTRY[tool_id]
     invocation_id = f"{current_user.oid}:{city}:{tool_id}"
-
-    # Store tool_id in paused_invocations for later use
+    user_oid = current_user.oid
+    as_type = tool_config["as_type"]
+    scopes_needed = frozenset(tool_config["scopes"])
+    # --- Token cache lookup by (user_oid, as_type, scopes) ---
+    cached_token = None
+    if tool_id == "github_tool":
+        # Look for an exact or superset match in the cache
+        for (cache_user_oid, cache_as_type, cache_scopes), token_data in token_cache.items():
+            if cache_user_oid == user_oid and cache_as_type == as_type and cache_scopes.issuperset(scopes_needed):
+                cached_token = token_data
+                break
+        if cached_token and cached_token.get("access_token"):
+            print(f"AgentService: Using cached GitHub token for user {user_oid} with scopes {scopes_needed}.")
+            github_token = cached_token["access_token"]
+            tool_service_url = tool_config["endpoint"]
+            headers = {
+                "Authorization": f"Bearer {github_token}",
+                "Content-Type": "application/json"
+            }
+            async with httpx.AsyncClient(verify=False) as client:
+                try:
+                    print(f"AgentService: Calling ToolService at {tool_service_url} for GitHub repos (cached token)")
+                    response = await client.get(tool_service_url, headers=headers, timeout=10.0)
+                    response.raise_for_status()
+                    tool_response_data = response.json()
+                    print(f"AgentService: Received response from ToolService: {tool_response_data}")
+                except Exception as e:
+                    print(f"AgentService: Error calling ToolService (GitHub): {e}")
+                    raise HTTPException(status_code=500, detail=f"Error calling ToolService (GitHub): {e}")
+            return {
+                "agent_message": f"Agent processed request for user {current_user.name} (github_tool, cached token).",
+                "tool_service_response": tool_response_data
+            }
     # For weather_tool, use OBO as before; for github_tool, simulate consent/token flow
     if tool_id == "weather_tool":
         try:
@@ -182,9 +216,39 @@ async def resume_paused_invocation(
     city = paused["city"]
     tool_id = paused.get("tool_id", "weather_tool")
     tool_config = TOOL_REGISTRY.get(tool_id)
-    if not tool_config:
-        raise HTTPException(status_code=500, detail=f"Tool config not found for tool_id: {tool_id}")
-    if tool_id == "weather_tool":
+    as_type = tool_config["as_type"]
+    user_oid = paused["user"].oid if paused.get("user") and hasattr(paused["user"], "oid") else None
+    scopes_needed = frozenset(tool_config["scopes"])
+    # Look for a cached token with a superset of the required scopes
+    cached_token = None
+    if tool_id == "github_tool":
+        for (cache_user_oid, cache_as_type, cache_scopes), token_data in token_cache.items():
+            if cache_user_oid == user_oid and cache_as_type == as_type and cache_scopes.issuperset(scopes_needed):
+                cached_token = token_data
+                break
+        github_token = paused.get("tool_access_token") or (cached_token or {}).get("access_token")
+        if not github_token:
+            raise HTTPException(status_code=400, detail="No GitHub access token found for this invocation. Please grant consent.")
+        tool_service_url = tool_config["endpoint"]
+        headers = {
+            "Authorization": f"Bearer {github_token}",
+            "Content-Type": "application/json"
+        }
+        async with httpx.AsyncClient(verify=False) as client:
+            try:
+                print(f"AgentService: [RESUME] Calling ToolService at {tool_service_url} for GitHub repos")
+                response = await client.get(tool_service_url, headers=headers, timeout=10.0)
+                response.raise_for_status()
+                tool_response_data = response.json()
+                print(f"AgentService: [RESUME] Received response from ToolService: {tool_response_data}")
+            except Exception as e:
+                print(f"AgentService: [RESUME] Error calling ToolService (GitHub): {e}")
+                raise HTTPException(status_code=500, detail=f"Error calling ToolService (GitHub) on resume: {e}")
+        return {
+            "agent_message": f"Agent resumed and completed request for user {current_user.name} (github_tool).",
+            "tool_service_response": tool_response_data
+        }
+    elif tool_id == "weather_tool":
         user_assertion_token = authorization.split("Bearer ")[1] if authorization and authorization.startswith("Bearer ") else paused["user_assertion_token"]
         try:
             tool_service_token = await get_obo_token_for_tool_service(user_assertion_token)
@@ -209,29 +273,6 @@ async def resume_paused_invocation(
                 raise HTTPException(status_code=500, detail=f"Error calling ToolService on resume: {e}")
         return {
             "agent_message": f"Agent resumed and completed request for user {current_user.name} (weather_tool).",
-            "tool_service_response": tool_response_data
-        }
-    elif tool_id == "github_tool":
-        github_token = paused.get("tool_access_token")
-        if not github_token:
-            raise HTTPException(status_code=400, detail="No GitHub access token found for this invocation. Please grant consent.")
-        tool_service_url = tool_config["endpoint"]
-        headers = {
-            "Authorization": f"Bearer {github_token}",
-            "Content-Type": "application/json"
-        }
-        async with httpx.AsyncClient(verify=False) as client:
-            try:
-                print(f"AgentService: [RESUME] Calling ToolService at {tool_service_url} for GitHub repos")
-                response = await client.get(tool_service_url, headers=headers, timeout=10.0)
-                response.raise_for_status()
-                tool_response_data = response.json()
-                print(f"AgentService: [RESUME] Received response from ToolService: {tool_response_data}")
-            except Exception as e:
-                print(f"AgentService: [RESUME] Error calling ToolService (GitHub): {e}")
-                raise HTTPException(status_code=500, detail=f"Error calling ToolService (GitHub) on resume: {e}")
-        return {
-            "agent_message": f"Agent resumed and completed request for user {current_user.name} (github_tool).",
             "tool_service_response": tool_response_data
         }
 
@@ -259,6 +300,9 @@ async def consent_callback(request: Request):
         return HTMLResponse(f"Tool config not found for tool_id: {tool_id}", status_code=500)
     tool_as_type = tool_config["as_type"]
 
+    user_oid = paused["user"].oid if paused.get("user") and hasattr(paused["user"], "oid") else None
+    scopes_needed = frozenset(tool_config["scopes"])
+    token_cache_key = (user_oid, tool_as_type, scopes_needed)
     if tool_as_type == "entra_id":
         import msal
         msal_app = msal.ConfidentialClientApplication(
@@ -302,11 +346,19 @@ async def consent_callback(request: Request):
             )
             token_data = response.json()
             access_token = token_data.get("access_token")
+            refresh_token = token_data.get("refresh_token")
+            expires_in = token_data.get("expires_in")
             if not access_token:
                 return HTMLResponse(f"GitHub token exchange failed: {token_data}", status_code=400)
             paused["tool_access_token"] = access_token
             paused["consent_complete"] = True
             paused_invocations[invocation_id] = paused
+            # Store in persistent token cache by (user_oid, as_type, scopes)
+            token_cache[token_cache_key] = {
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "expires_at": None  # Optionally, calculate expiry time
+            }
             return HTMLResponse("GitHub consent complete. Please return to the app and click Resume.")
         except Exception as e:
             return HTMLResponse(f"Exception during GitHub token exchange: {str(e)}", status_code=500)
