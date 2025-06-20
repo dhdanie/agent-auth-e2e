@@ -2,8 +2,9 @@
 
 from typing import Dict, List
 
-from fastapi import FastAPI, Depends, Security, HTTPException, status, Query
+from fastapi import FastAPI, Depends, Security, HTTPException, status, Query, Header
 from pydantic import BaseModel
+import httpx
 
 from .auth_utils import get_current_user, TokenData  # Import from the current package
 from .config import settings  # Import from the current package
@@ -28,6 +29,11 @@ class AnotherToolInput(BaseModel):
 
 class AnotherToolResponse(BaseModel):
     result: str
+
+
+class GithubRepo(BaseModel):
+    name: str
+    url: str
 
 
 # --- API Endpoints ---
@@ -96,6 +102,34 @@ async def another_tool(
     result_text = f"Tool processed '{tool_input}' for {user_name}."
     print(f"ToolService: Successfully executed 'anothertool' for user {user_name}.")
     return AnotherToolResponse(result=result_text)
+
+
+@app.get(
+    "/api/github-repos",
+    response_model=List[GithubRepo],
+    summary="Get GitHub repositories (real)",
+    description="Fetches a list of GitHub repos for the user using the user's GitHub access token.",
+)
+async def get_github_repos(
+    authorization: str = Header(None)
+) -> List[GithubRepo]:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header.")
+    access_token = authorization.split("Bearer ")[1]
+    github_api_url = "https://api.github.com/user/repos"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/vnd.github+json"
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(github_api_url, headers=headers, timeout=10.0)
+            if resp.status_code != 200:
+                raise HTTPException(status_code=resp.status_code, detail=f"GitHub API error: {resp.text}")
+            repos = resp.json()
+            return [GithubRepo(name=repo["name"], url=repo["html_url"]) for repo in repos]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching GitHub repos: {str(e)}")
 
 
 # --- Lifecycle Events (Optional, for printing config on startup) ---
