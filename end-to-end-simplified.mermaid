@@ -1,0 +1,37 @@
+sequenceDiagram
+    participant U as User
+    participant C as Client Application
+    participant AS as Auth Server
+    participant AP as Agent Platform
+    participant TR as Tool Registry
+    participant TS as Tool Service
+
+    Note right of U: Initial Login and Consent
+    U->>C: Launch Client Application
+    C-->>U: Redirect to Auth Server (include Agent Platform scope)
+    U->>AS: Login and Grant Consent
+    AS-->>U: Redirect to Client Application (with access code)
+    U->>C: Access Client Application (with access code)
+    C->>AS: Exchange Access Code for Auth/Refresh Tokens
+    AS-->>C: Return Auth/Refresh Tokens
+    C->>C: Cache Tokens/Establish Session
+    C-->>U: Redirect to main page
+
+    Note right of U: Invoke Agent
+    U->>C: Initiate agent interaction
+    C->>AP: Invoke Agent Service (sending auth token)
+    AP->>AS: Validate Auth Token
+    AS-->>AP: Token Validated
+    AP->>TR: Retrieve AS/Scopes for Tool
+    TR-->>AP: Tool AS/Scopes
+    AP->>C: Additional Consent Required (send consent URL)
+    C->>U: Display Additional Consent Required (link)
+    U->>AS: Click link, log in, grant consent
+    AS-->>U: Redirect to Agent Service Callback (with access code)
+    U->>AP: Redirect to Agent Service Callback (with access code)
+    AP->>AS: Exchange Access Code for Auth Token (for Tool Service)
+    AS-->>AP: Return Auth Token
+    AP->>TS: Invoke Tool Service (with tool auth token)
+    TS-->>AP: Tool Service Response
+    AP-->>C: Return Agent Response
+    C-->>U: Display Agent Response
